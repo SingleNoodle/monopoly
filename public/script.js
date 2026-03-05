@@ -19,6 +19,7 @@ const buyPropertyBtn = document.getElementById('buyPropertyBtn');
 const skipBuyBtn = document.getElementById('skipBuyBtn');
 const gameMessage = document.getElementById('gameMessage');
 const gameStatus = document.getElementById('gameStatus');
+const controlsTurnStatus = document.getElementById('controlsTurnStatus');
 const diceDisplay = document.getElementById('diceDisplay');
 
 // Join game
@@ -58,21 +59,24 @@ socket.on('gameState', (state) => {
 
 socket.on('diceRolled', (data) => {
     displayDice(data.dice);
-    const currentPlayer = gameState.players[gameState.currentPlayerIndex];
-    const space = gameState.board[currentPlayer.position];
+    const currentPlayer = gameState?.players?.find(player => player.id === data.playerId)
+        || gameState?.players?.[gameState?.currentPlayerIndex];
+    const space = currentPlayer ? gameState?.board?.[currentPlayer.position] : null;
+    const playerName = data.playerName || currentPlayer?.name || 'Player';
+    const spaceName = data.spaceName || data.result.propertyName || space?.name || 'this space';
     
     if (data.result.action === 'paidRent') {
-        gameMessage.textContent = `${currentPlayer.name} pays $${data.result.rent} rent to ${data.result.owner}`;
+        gameMessage.textContent = `${playerName} pays $${data.result.rent} rent to ${data.result.owner} for ${data.result.propertyName || spaceName}`;
     } else if (data.result.action === 'paidTax') {
-        gameMessage.textContent = `${currentPlayer.name} pays $${data.result.amount} in taxes`;
+        gameMessage.textContent = `${playerName} pays $${data.result.amount} in taxes`;
     } else if (data.result.action === 'goToJail') {
-        gameMessage.textContent = `${currentPlayer.name} goes to jail!`;
+        gameMessage.textContent = `${playerName} goes to jail!`;
     } else if (data.result.action === 'passedGo') {
-        gameMessage.textContent = `${currentPlayer.name} passed GO! Collect $200`;
+        gameMessage.textContent = `${playerName} passed GO! Collect $200`;
     } else if (data.result.action === 'canBuy') {
-        gameMessage.textContent = `${currentPlayer.name} landed on ${space.name}. Buy for $${space.price}?`;
+        gameMessage.textContent = `${playerName} landed on ${spaceName}. Buy for $${space?.price || data.result.space?.price || 0}?`;
     } else {
-        gameMessage.textContent = `${currentPlayer.name} rolled ${data.total} (${data.dice[0]} + ${data.dice[1]})`;
+        gameMessage.textContent = `${playerName} rolled ${data.total} (${data.dice[0]} + ${data.dice[1]})`;
     }
     
     updateUI();
@@ -116,6 +120,8 @@ function updateUI() {
     if (currentPlayer) {
         gameStatus.textContent = `${currentPlayer.name}'s Turn`;
         gameStatus.style.color = currentPlayer.color;
+        controlsTurnStatus.textContent = `${currentPlayer.name}'s Turn`;
+        controlsTurnStatus.style.color = currentPlayer.color;
     }
 }
 
@@ -127,11 +133,12 @@ function updateLobby() {
     // Update player list
     playerList.innerHTML = '';
     gameState.players.forEach((player, index) => {
+        const propertyTooltip = getPlayerPropertiesTooltip(player);
         const playerDiv = document.createElement('div');
         playerDiv.className = 'lobby-player';
         playerDiv.style.borderLeft = `4px solid ${player.color}`;
         playerDiv.innerHTML = `
-            <span class="player-name">${player.name}</span>
+            <span class="player-name" title="${propertyTooltip}">${player.name}</span>
             <span class="player-money">$${player.money}</span>
         `;
         playerList.appendChild(playerDiv);
@@ -204,8 +211,24 @@ function createSpace(spaceId, row, col) {
     spaceDiv.style.gridRow = row + 1;
     spaceDiv.style.gridColumn = col + 1;
     
-    // Check if property is owned
-    const owner = space.owner ? gameState.players.find(p => p.id === space.owner) : null;
+    // Check if property is owned.
+    // Primary source: players' owned property lists (most reliable for rendering owner colors).
+    let owner = gameState.players.find(player =>
+        Array.isArray(player.properties) && player.properties.includes(space.id)
+    ) || null;
+
+    // Fallback source: board owner field.
+    if (!owner && space.owner) {
+        owner = gameState.players.find(p => String(p.id) === String(space.owner)) || null;
+        if (!owner) {
+            const maybeIndex = Number(space.owner);
+            if (Number.isInteger(maybeIndex) && maybeIndex >= 0 && maybeIndex < gameState.players.length) {
+                owner = gameState.players[maybeIndex];
+            } else {
+                console.debug(`Owner id ${space.owner} not found among players`);
+            }
+        }
+    }
     const ownerColor = owner ? owner.color : null;
     
     spaceDiv.innerHTML = `
@@ -225,6 +248,11 @@ function updatePlayersList() {
     playersList.innerHTML = '';
     gameState.players.forEach((player) => {
         const playerDiv = document.createElement('div');
+        const ownedProperties = getPlayerPropertyNames(player);
+        const propertyRows = ownedProperties.length > 0
+            ? ownedProperties.map(propertyName => `<div class="player-tooltip-item">${propertyName}</div>`).join('')
+            : '<div class="player-tooltip-item">None</div>';
+        const tooltipContent = `<div class="player-tooltip-title">Properties Owned:</div>${propertyRows}`;
         playerDiv.className = 'player-item';
         if (player.id === gameState.players[gameState.currentPlayerIndex].id) {
             playerDiv.classList.add('current-turn');
@@ -235,8 +263,9 @@ function updatePlayersList() {
                 <span class="player-name">${player.name}</span>
                 <span class="player-money">$${player.money}</span>
             </div>
-            <div class="player-properties">
+            <div class="player-properties player-properties-hover">
                 Properties: ${player.properties.length}
+                <span class="player-properties-tooltip">${tooltipContent}</span>
             </div>
         `;
         playersList.appendChild(playerDiv);
@@ -305,4 +334,22 @@ playerNameInput.addEventListener('keypress', (e) => {
         joinBtn.click();
     }
 });
+
+//Purpose: Helper function to get player properties
+//Input: player
+//Output: The player's properties as a string
+function getPlayerPropertiesTooltip(player){
+    const ownedPropertyNames = getPlayerPropertyNames(player);
+    if(ownedPropertyNames.length === 0){
+        return 'Properties: None';
+    }
+
+    return `Properties: ${ownedPropertyNames.join(', ')}`;
+}
+
+function getPlayerPropertyNames(player) {
+    return player.properties
+        .map(propertyID => gameState.board[propertyID]?.name)
+        .filter(Boolean);
+}
 
