@@ -96,6 +96,34 @@ socket.on('diceRolled', (data) => {
         gameMessage.textContent = `${playerName} passed GO! Collect $200`;
     } else if (data.result.action === 'canBuy') {
         gameMessage.textContent = `${playerName} landed on ${spaceName}. Buy for $${space?.price || data.result.space?.price || 0}?`;
+    } else if (data.result.action === 'chanceCard') {
+        const movementText = data.result.newSpaceName ? ` Moved to ${data.result.newSpaceName}.` : '';
+        const moneyText = typeof data.result.amount === 'number'
+            ? ` ${data.result.amount >= 0 ? `Collect $${data.result.amount}` : `Pay $${Math.abs(data.result.amount)}`}.`
+            : '';
+        let followUpText = '';
+        if (data.postCardResult?.action === 'canBuy') {
+            const followUpSpace = data.postCardResult.space?.name || data.finalSpaceName || 'this property';
+            const followUpPrice = data.postCardResult.space?.price || 0;
+            followUpText = ` ${playerName} can buy ${followUpSpace} for $${followUpPrice}.`;
+        } else if (data.postCardResult?.action === 'rentDue') {
+            followUpText = ` ${playerName} owes $${data.postCardResult.rent} rent to ${data.postCardResult.owner} for ${data.postCardResult.propertyName}.`;
+        }
+        gameMessage.textContent = `${playerName} drew Chance: ${data.result.cardText}.${movementText}${moneyText}${followUpText}`;
+    } else if (data.result.action === 'chestCard') {
+        const movementText = data.result.newSpaceName ? ` Moved to ${data.result.newSpaceName}.` : '';
+        const moneyText = typeof data.result.amount === 'number'
+            ? ` ${data.result.amount >= 0 ? `Collect $${data.result.amount}` : `Pay $${Math.abs(data.result.amount)}`}.`
+            : '';
+        let followUpText = '';
+        if (data.postCardResult?.action === 'canBuy') {
+            const followUpSpace = data.postCardResult.space?.name || data.finalSpaceName || 'this property';
+            const followUpPrice = data.postCardResult.space?.price || 0;
+            followUpText = ` ${playerName} can buy ${followUpSpace} for $${followUpPrice}.`;
+        } else if (data.postCardResult?.action === 'rentDue') {
+            followUpText = ` ${playerName} owes $${data.postCardResult.rent} rent to ${data.postCardResult.owner} for ${data.postCardResult.propertyName}.`;
+        }
+        gameMessage.textContent = `${playerName} drew Community Chest: ${data.result.cardText}.${movementText}${moneyText}${followUpText}`;
     } else {
         gameMessage.textContent = `${playerName} rolled ${data.total} (${data.dice[0]} + ${data.dice[1]})`;
     }

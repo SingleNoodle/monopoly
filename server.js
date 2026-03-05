@@ -77,6 +77,23 @@ gameState.board = BOARD_SPACES.map(space => ({ ...space }));
 // Player colors
 const PLAYER_COLORS = ['#fa0000', '#0bf2e3', '#efca13', '#35e71a', '#2d00a8', '#fc870b'];
 
+const CHANCE_CARDS = [
+  { text: 'Advance to GO (Collect $200)', type: 'move', position: 0, collectGo: true },
+  { text: 'Bank pays you dividend of $50', type: 'money', amount: 50 },
+  { text: 'Pay poor tax of $15', type: 'money', amount: -15 },
+  { text: 'Advance to Illinois Avenue', type: 'move', position: 24, collectGo: true },
+  { text: 'Go to Jail. Go directly to Jail.', type: 'jail' },
+];
+
+const COMMUNITY_CHEST_CARDS = [
+  { text: 'Bank error in your favor. Collect $200', type: 'money', amount: 200 },
+  { text: 'Doctor\'s fee. Pay $50', type: 'money', amount: -50 },
+  { text: 'From sale of stock you get $50', type: 'money', amount: 50 },
+  { text: 'Pay school fees of $50', type: 'money', amount: -50 },
+  { text: 'Advance to GO (Collect $200)', type: 'move', position: 0, collectGo: true },
+  { text: 'Go to Jail. Go directly to Jail.', type: 'jail' },
+];
+
 // Broadcast game state to all clients
 function broadcastGameState() {
   io.emit('gameState', gameState);
@@ -98,6 +115,55 @@ function calculateRent(space, owner) {
     return 0; // Will be calculated with dice roll
   }
   return space.rent;
+}
+
+function drawRandomCard(cards) {
+  const index = Math.floor(Math.random() * cards.length);
+  return cards[index];
+}
+
+function movePlayerToPosition(player, newPosition, collectGo = false) {
+  const oldPosition = player.position;
+  const passedGo = newPosition < oldPosition;
+  player.position = newPosition;
+
+  if (collectGo && passedGo) {
+    player.money += 200;
+  }
+}
+
+function applyCardEffect(player, spaceType) {
+  const isChance = spaceType === 'chance';
+  const deck = isChance ? CHANCE_CARDS : COMMUNITY_CHEST_CARDS;
+  const card = drawRandomCard(deck);
+
+  const result = {
+    action: isChance ? 'chanceCard' : 'chestCard',
+    cardText: card.text,
+  };
+
+  if (card.type === 'money') {
+    player.money += card.amount;
+    result.amount = card.amount;
+    return result;
+  }
+
+  if (card.type === 'move') {
+    movePlayerToPosition(player, card.position, !!card.collectGo);
+    result.newPosition = player.position;
+    result.newSpaceName = gameState.board[player.position]?.name;
+    return result;
+  }
+
+  if (card.type === 'jail') {
+    player.position = 10;
+    player.inJail = true;
+    result.newPosition = 10;
+    result.newSpaceName = 'JAIL';
+    return result;
+  }
+
+  return result;
 }
 
 // Handle player landing on a space
@@ -127,6 +193,8 @@ function handleLandOnSpace(player, space, diceRoll) {
   } else if (space.type === 'tax') {
     player.money -= space.amount;
     return { action: 'paidTax', amount: space.amount };
+  } else if (space.type === 'chance' || space.type === 'chest') {
+    return applyCardEffect(player, space.type);
   } else if (space.type === 'gotojail') {
     player.position = 10;
     player.inJail = true;
@@ -226,19 +294,30 @@ io.on('connection', (socket) => {
     // Handle landing on space
     const space = gameState.board[newPosition];
     const result = handleLandOnSpace(currentPlayer, space, total);
+    let postCardResult = null;
+
+    // If a card moved the player, resolve the destination square too
+    if ((result.action === 'chanceCard' || result.action === 'chestCard') && Number.isInteger(result.newPosition)) {
+      const destinationSpace = gameState.board[currentPlayer.position];
+      if (destinationSpace && destinationSpace.type !== 'chance' && destinationSpace.type !== 'chest') {
+        postCardResult = handleLandOnSpace(currentPlayer, destinationSpace, total);
+      }
+    }
+
+    const finalResult = postCardResult || result;
 
     // Update game phase
-    if (result.action === 'canBuy') {
+    if (finalResult.action === 'canBuy') {
       gameState.gamePhase = 'buying';
-    } else if (result.action === 'rentDue') {
+    } else if (finalResult.action === 'rentDue') {
       // Create a pending rent object and wait for payer confirmation
-      console.log(`Rent due: payer=${currentPlayer.id}, owner=${result.ownerId}, rent=${result.rent}, property=${result.propertyName}`);
+      console.log(`Rent due: payer=${currentPlayer.id}, owner=${finalResult.ownerId}, rent=${finalResult.rent}, property=${finalResult.propertyName}`);
       gameState.pendingRent = {
         payerId: currentPlayer.id,
-        ownerId: result.ownerId,
-        rent: result.rent,
-        propertyId: result.propertyId,
-        propertyName: result.propertyName,
+        ownerId: finalResult.ownerId,
+        rent: finalResult.rent,
+        propertyId: finalResult.propertyId,
+        propertyName: finalResult.propertyName,
         isDoubles: isDoubles,
         diceTotal: total,
       };
@@ -253,10 +332,12 @@ io.on('connection', (socket) => {
       playerName: currentPlayer.name,
       ownerId: space.owner || null,
       spaceName: space.name,
+      finalSpaceName: gameState.board[currentPlayer.position]?.name,
       dice: [die1, die2],
       total: total,
       isDoubles: isDoubles,
-      result: result
+      result: result,
+      postCardResult: postCardResult
     });
 
     broadcastGameState();
@@ -266,7 +347,7 @@ io.on('connection', (socket) => {
     // - If doubles (and not buying), same player rolls again
     // - Otherwise, advance to next player
     // If renting is due we wait for the payer to confirm; otherwise handle turn progression
-    if (result.action !== 'canBuy' && result.action !== 'rentDue') {
+    if (finalResult.action !== 'canBuy' && finalResult.action !== 'rentDue') {
       if (isDoubles) {
         setTimeout(() => {
           gameState.gamePhase = 'rolling';
