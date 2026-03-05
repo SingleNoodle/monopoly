@@ -106,6 +106,9 @@ function handleLandOnSpace(player, space, diceRoll) {
     } else if (space.owner !== player.id) {
       // Property is owned by someone else - pay rent
       const owner = gameState.players.find(p => p.id === space.owner);
+      if (!owner) {
+        return { action: 'none' };
+      }
       let rent = calculateRent(space, owner);
       
       if (space.type === 'utility') {
@@ -117,7 +120,7 @@ function handleLandOnSpace(player, space, diceRoll) {
       
       player.money -= rent;
       owner.money += rent;
-      return { action: 'paidRent', rent: rent, owner: owner.name };
+      return { action: 'paidRent', rent: rent, owner: owner.name, propertyName: space.name };
     }
   } else if (space.type === 'tax') {
     player.money -= space.amount;
@@ -231,6 +234,8 @@ io.on('connection', (socket) => {
     // Broadcast dice result and game state
     io.emit('diceRolled', {
       playerId: currentPlayer.id,
+      playerName: currentPlayer.name,
+      spaceName: space.name,
       dice: [die1, die2],
       total: total,
       isDoubles: isDoubles,

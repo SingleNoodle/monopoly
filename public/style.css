@@ -160,6 +160,7 @@ body {
     margin: 8px 0;
     border-radius: 8px;
     transition: transform 0.2s;
+    position: relative;
 }
 
 .player-item.current-turn {
@@ -179,6 +180,48 @@ body {
     font-weight: bold;
 }
 
+.player-properties-hover {
+    position: relative;
+    display: inline-block;
+    cursor: default;
+}
+
+.player-properties-tooltip {
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 0;
+    transform: translateY(-50%);
+    min-width: 170px;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 8px 10px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    font-size: 12px;
+    color: #333;
+    z-index: 30;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+
+.player-properties-hover:hover .player-properties-tooltip {
+    visibility: visible;
+    opacity: 1;
+}
+
+.player-tooltip-title {
+    font-weight: bold;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+
+.player-tooltip-item {
+    white-space: nowrap;
+    line-height: 1.4;
+}
+
 .player-item .player-money {
     color: #228B22;
     font-weight: bold;
@@ -190,6 +233,13 @@ body {
 }
 
 /* Controls */
+.controls-turn-status {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 14px;
+    text-align: left;
+}
+
 .dice-display {
     display: flex;
     gap: 15px;
