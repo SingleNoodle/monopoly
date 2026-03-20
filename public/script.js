@@ -3,6 +3,11 @@ const socket = io();
 
 let gameState = null;
 let currentPlayerId = null;
+// Track connection id when connected
+socket.on('connect', () => {
+    currentPlayerId = socket.id;
+    console.log('Socket connected:', socket.id);
+});
 
 // DOM Elements
 const lobbyScreen = document.getElementById('lobby');
@@ -17,8 +22,11 @@ const playersList = document.getElementById('playersList');
 const rollDiceBtn = document.getElementById('rollDiceBtn');
 const buyPropertyBtn = document.getElementById('buyPropertyBtn');
 const skipBuyBtn = document.getElementById('skipBuyBtn');
+const payJailFineBtn = document.getElementById('payJailFineBtn');
+const useJailCardBtn = document.getElementById('useJailCardBtn');
 const gameMessage = document.getElementById('gameMessage');
 const gameStatus = document.getElementById('gameStatus');
+const controlsTurnStatus = document.getElementById('controlsTurnStatus');
 const diceDisplay = document.getElementById('diceDisplay');
 
 // Join game
@@ -37,6 +45,19 @@ startBtn.addEventListener('click', () => {
 
 // Roll dice
 rollDiceBtn.addEventListener('click', () => {
+    if (!gameState) return;
+
+    const currentPlayer = gameState.players?.[gameState.currentPlayerIndex];
+    const isMyTurn = currentPlayer && currentPlayer.socketId === socket.id;
+
+    if (gameState.gamePhase === 'payingRent' && isMyTurn && gameState.pendingRent && currentPlayer && gameState.pendingRent.payerId === currentPlayer.id) {
+        console.log('Pay Rent clicked via roll button — emitting payRent');
+        socket.emit('payRent');
+        rollDiceBtn.disabled = true;
+        gameMessage.textContent = 'Paying rent...';
+        return;
+    }
+
     socket.emit('rollDice');
 });
 
@@ -50,6 +71,14 @@ skipBuyBtn.addEventListener('click', () => {
     socket.emit('skipBuy');
 });
 
+payJailFineBtn.addEventListener('click', () => {
+    socket.emit('payJailFine');
+});
+
+useJailCardBtn.addEventListener('click', () => {
+    socket.emit('useGetOutOfJailCard');
+});
+
 // Socket event listeners
 socket.on('gameState', (state) => {
     gameState = state;
@@ -57,35 +86,99 @@ socket.on('gameState', (state) => {
 });
 
 socket.on('diceRolled', (data) => {
+    console.log('diceRolled event', data);
     displayDice(data.dice);
-    const currentPlayer = gameState.players[gameState.currentPlayerIndex];
-    const space = gameState.board[currentPlayer.position];
+    const currentPlayer = gameState?.players?.find(player => player.id === data.playerId)
+        || gameState?.players?.[gameState?.currentPlayerIndex];
+    const space = currentPlayer ? gameState?.board?.[currentPlayer.position] : null;
+    const playerName = data.playerName || currentPlayer?.name || 'Player';
+    const spaceName = data.spaceName || data.result.propertyName || space?.name || 'this space';
     
     if (data.result.action === 'paidRent') {
-        gameMessage.textContent = `${currentPlayer.name} pays $${data.result.rent} rent to ${data.result.owner}`;
+        gameMessage.textContent = `${playerName} pays $${data.result.rent} rent to ${data.result.owner} for ${data.result.propertyName || spaceName}`;
+    } else if (data.result.action === 'rentDue') {
+        gameMessage.textContent = `${playerName} owes $${data.result.rent} rent to ${data.result.owner} for ${data.result.propertyName || spaceName}`;
     } else if (data.result.action === 'paidTax') {
-        gameMessage.textContent = `${currentPlayer.name} pays $${data.result.amount} in taxes`;
+        gameMessage.textContent = `${playerName} pays $${data.result.amount} in taxes`;
     } else if (data.result.action === 'goToJail') {
-        gameMessage.textContent = `${currentPlayer.name} goes to jail!`;
+        gameMessage.textContent = `${playerName} goes to jail!`;
+    } else if (data.result.action === 'goToJailByDoubles') {
+        gameMessage.textContent = `${playerName} rolled three doubles in a row and goes to jail!`;
+    } else if (data.result.action === 'jailStay') {
+        gameMessage.textContent = `${playerName} did not roll doubles and stays in jail (${data.result.turnsRemaining} attempts left).`;
+    } else if (data.result.action === 'jailThirdFailPaid') {
+        gameMessage.textContent = `${playerName} failed their 3rd jail roll, paid $${data.result.amount}, and now moves normally.`;
     } else if (data.result.action === 'passedGo') {
-        gameMessage.textContent = `${currentPlayer.name} passed GO! Collect $200`;
+        gameMessage.textContent = `${playerName} passed GO! Collect $200`;
     } else if (data.result.action === 'canBuy') {
-        gameMessage.textContent = `${currentPlayer.name} landed on ${space.name}. Buy for $${space.price}?`;
+        gameMessage.textContent = `${playerName} landed on ${spaceName}. Buy for $${space?.price || data.result.space?.price || 0}?`;
+    } else if (data.result.action === 'chanceCard') {
+        const movementText = data.result.newSpaceName ? ` Moved to ${data.result.newSpaceName}.` : '';
+        const moneyText = typeof data.result.amount === 'number'
+            ? ` ${data.result.amount >= 0 ? `Collect $${data.result.amount}` : `Pay $${Math.abs(data.result.amount)}`}.`
+            : '';
+        const cardText = data.result.cardGranted === 'getOutOfJail' ? ' Received a Get Out of Jail Free card.' : '';
+        let followUpText = '';
+        if (data.postCardResult?.action === 'canBuy') {
+            const followUpSpace = data.postCardResult.space?.name || data.finalSpaceName || 'this property';
+            const followUpPrice = data.postCardResult.space?.price || 0;
+            followUpText = ` ${playerName} can buy ${followUpSpace} for $${followUpPrice}.`;
+        } else if (data.postCardResult?.action === 'rentDue') {
+            followUpText = ` ${playerName} owes $${data.postCardResult.rent} rent to ${data.postCardResult.owner} for ${data.postCardResult.propertyName}.`;
+        }
+        gameMessage.textContent = `${playerName} drew Chance: ${data.result.cardText}.${movementText}${moneyText}${cardText}${followUpText}`;
+    } else if (data.result.action === 'chestCard') {
+        const movementText = data.result.newSpaceName ? ` Moved to ${data.result.newSpaceName}.` : '';
+        const moneyText = typeof data.result.amount === 'number'
+            ? ` ${data.result.amount >= 0 ? `Collect $${data.result.amount}` : `Pay $${Math.abs(data.result.amount)}`}.`
+            : '';
+        const cardText = data.result.cardGranted === 'getOutOfJail' ? ' Received a Get Out of Jail Free card.' : '';
+        let followUpText = '';
+        if (data.postCardResult?.action === 'canBuy') {
+            const followUpSpace = data.postCardResult.space?.name || data.finalSpaceName || 'this property';
+            const followUpPrice = data.postCardResult.space?.price || 0;
+            followUpText = ` ${playerName} can buy ${followUpSpace} for $${followUpPrice}.`;
+        } else if (data.postCardResult?.action === 'rentDue') {
+            followUpText = ` ${playerName} owes $${data.postCardResult.rent} rent to ${data.postCardResult.owner} for ${data.postCardResult.propertyName}.`;
+        }
+        gameMessage.textContent = `${playerName} drew Community Chest: ${data.result.cardText}.${movementText}${moneyText}${cardText}${followUpText}`;
     } else {
-        gameMessage.textContent = `${currentPlayer.name} rolled ${data.total} (${data.dice[0]} + ${data.dice[1]})`;
+        gameMessage.textContent = `${playerName} rolled ${data.total} (${data.dice[0]} + ${data.dice[1]})`;
     }
     
     updateUI();
 });
 
+// Rent paid event from server
+socket.on('rentPaid', (data) => {
+    console.log('rentPaid event', data);
+    gameMessage.textContent = `${data.payerName} paid $${data.rent} rent to ${data.ownerName} for ${data.propertyName}`;
+    updateUI();
+});
+
 socket.on('propertyBought', (data) => {
-    gameMessage.textContent = `${data.playerId === currentPlayerId ? 'You' : 'Player'} bought ${data.propertyName} for $${data.price}`;
+    gameMessage.textContent = `${data.playerName || 'Player'} bought ${data.propertyName} for $${data.price}`;
+    updateUI();
+});
+
+socket.on('jailFinePaid', (data) => {
+    gameMessage.textContent = `${data.playerName} paid $${data.amount} to get out of jail and may roll now.`;
+    updateUI();
+});
+
+socket.on('usedGetOutOfJailCard', (data) => {
+    gameMessage.textContent = `${data.playerName} used a Get Out of Jail Free card.`;
     updateUI();
 });
 
 socket.on('error', (message) => {
     gameMessage.textContent = `Error: ${message}`;
     console.error('Socket error:', message);
+});
+
+// Log unhandled promise rejections to help debug extension vs app issues
+window.addEventListener('unhandledrejection', (e) => {
+    console.error('Unhandled promise rejection:', e.reason, e);
 });
 
 // Update UI based on game state
@@ -116,6 +209,8 @@ function updateUI() {
     if (currentPlayer) {
         gameStatus.textContent = `${currentPlayer.name}'s Turn`;
         gameStatus.style.color = currentPlayer.color;
+        controlsTurnStatus.textContent = `${currentPlayer.name}'s Turn`;
+        controlsTurnStatus.style.color = currentPlayer.color;
     }
 }
 
@@ -127,11 +222,12 @@ function updateLobby() {
     // Update player list
     playerList.innerHTML = '';
     gameState.players.forEach((player, index) => {
+        const propertyTooltip = getPlayerPropertiesTooltip(player);
         const playerDiv = document.createElement('div');
         playerDiv.className = 'lobby-player';
         playerDiv.style.borderLeft = `4px solid ${player.color}`;
         playerDiv.innerHTML = `
-            <span class="player-name">${player.name}</span>
+            <span class="player-name" title="${propertyTooltip}">${player.name}</span>
             <span class="player-money">$${player.money}</span>
         `;
         playerList.appendChild(playerDiv);
@@ -204,8 +300,24 @@ function createSpace(spaceId, row, col) {
     spaceDiv.style.gridRow = row + 1;
     spaceDiv.style.gridColumn = col + 1;
     
-    // Check if property is owned
-    const owner = space.owner ? gameState.players.find(p => p.id === space.owner) : null;
+    // Check if property is owned.
+    // Primary source: players' owned property lists (most reliable for rendering owner colors).
+    let owner = gameState.players.find(player =>
+        Array.isArray(player.properties) && player.properties.includes(space.id)
+    ) || null;
+
+    // Fallback source: board owner field.
+    if (!owner && space.owner) {
+        owner = gameState.players.find(p => String(p.id) === String(space.owner)) || null;
+        if (!owner) {
+            const maybeIndex = Number(space.owner);
+            if (Number.isInteger(maybeIndex) && maybeIndex >= 0 && maybeIndex < gameState.players.length) {
+                owner = gameState.players[maybeIndex];
+            } else {
+                console.debug(`Owner id ${space.owner} not found among players`);
+            }
+        }
+    }
     const ownerColor = owner ? owner.color : null;
     
     spaceDiv.innerHTML = `
@@ -225,6 +337,11 @@ function updatePlayersList() {
     playersList.innerHTML = '';
     gameState.players.forEach((player) => {
         const playerDiv = document.createElement('div');
+        const ownedProperties = getPlayerPropertyNames(player);
+        const propertyRows = ownedProperties.length > 0
+            ? ownedProperties.map(propertyName => `<div class="player-tooltip-item">${propertyName}</div>`).join('')
+            : '<div class="player-tooltip-item">None</div>';
+        const tooltipContent = `<div class="player-tooltip-title">Properties Owned:</div>${propertyRows}`;
         playerDiv.className = 'player-item';
         if (player.id === gameState.players[gameState.currentPlayerIndex].id) {
             playerDiv.classList.add('current-turn');
@@ -235,8 +352,9 @@ function updatePlayersList() {
                 <span class="player-name">${player.name}</span>
                 <span class="player-money">$${player.money}</span>
             </div>
-            <div class="player-properties">
+            <div class="player-properties player-properties-hover">
                 Properties: ${player.properties.length}
+                <span class="player-properties-tooltip">${tooltipContent}</span>
             </div>
         `;
         playersList.appendChild(playerDiv);
@@ -245,9 +363,10 @@ function updatePlayersList() {
 
 function updateControls() {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
-    const isMyTurn = currentPlayer && currentPlayer.id === socket.id;
+    const isMyTurn = currentPlayer && currentPlayer.socketId === socket.id;
 
-    // Roll dice button
+    // Default roll dice button state
+    rollDiceBtn.textContent = 'Roll Dice';
     rollDiceBtn.disabled = !isMyTurn || gameState.gamePhase !== 'rolling';
     
     // Buy property buttons
@@ -260,6 +379,32 @@ function updateControls() {
     } else {
         buyPropertyBtn.style.display = 'none';
         skipBuyBtn.style.display = 'none';
+    }
+
+    // Rent payment uses the roll button as a context action
+    if (gameState.gamePhase === 'payingRent' && gameState.pendingRent) {
+        const isPayer = isMyTurn && currentPlayer && gameState.pendingRent.payerId === currentPlayer.id;
+        rollDiceBtn.textContent = `Pay Rent: $${gameState.pendingRent.rent}`;
+        rollDiceBtn.disabled = !isPayer;
+        buyPropertyBtn.style.display = 'none';
+        skipBuyBtn.style.display = 'none';
+    }
+
+    // Jail controls
+    payJailFineBtn.style.display = 'none';
+    useJailCardBtn.style.display = 'none';
+    if (gameState.gamePhase === 'rolling' && isMyTurn && currentPlayer?.inJail) {
+        rollDiceBtn.textContent = 'Roll for Doubles (Jail)';
+        payJailFineBtn.style.display = currentPlayer.hasPaidJailFine ? 'none' : 'block';
+        payJailFineBtn.disabled = !!currentPlayer.hasPaidJailFine;
+        useJailCardBtn.style.display = currentPlayer.getOutOfJailCards > 0 ? 'block' : 'none';
+        useJailCardBtn.disabled = currentPlayer.getOutOfJailCards <= 0;
+    }
+
+    // Legacy dedicated pay-rent button is hidden (rent now uses roll button)
+    const payRentBtn = document.getElementById('payRentBtn');
+    if (payRentBtn) {
+        payRentBtn.style.display = 'none';
     }
 }
 
@@ -305,4 +450,22 @@ playerNameInput.addEventListener('keypress', (e) => {
         joinBtn.click();
     }
 });
+
+//Purpose: Helper function to get player properties
+//Input: player
+//Output: The player's properties as a string
+function getPlayerPropertiesTooltip(player){
+    const ownedPropertyNames = getPlayerPropertyNames(player);
+    if(ownedPropertyNames.length === 0){
+        return 'Properties: None';
+    }
+
+    return `Properties: ${ownedPropertyNames.join(', ')}`;
+}
+
+function getPlayerPropertyNames(player) {
+    return player.properties
+        .map(propertyID => gameState.board[propertyID]?.name)
+        .filter(Boolean);
+}
 
