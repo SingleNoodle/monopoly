@@ -654,11 +654,8 @@ function updateControls() {
         const isPayer = isMyTurn && currentPlayer && gameState.pendingRent.payerId === currentPlayer.id;
         rollDiceBtn.textContent = `Pay Rent: $${gameState.pendingRent.rent}`;
         rollDiceBtn.disabled = !isPayer;
-        rollDiceBtn.classList.add('flashing');
         buyPropertyBtn.style.display = 'none';
         skipBuyBtn.style.display = 'none';
-    } else {
-        rollDiceBtn.classList.remove('flashing');
     }
 
     // Jail controls
